@@ -95,3 +95,7 @@ func NewObject(file *os.File, bucket, key string, size int64) *Object {
 		Size:   size,
 	}
 }
+
+func (o *Object) Save(conn CobaltStorage) error {
+	return conn.Put(o)
+}

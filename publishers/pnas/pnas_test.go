@@ -11,7 +11,11 @@ func TestProcess(t *testing.T) {
 
 	conn := &publishers.MockStorage{}
 
-	err := Process(conn, "../../test", "files/pnas/113_1/pnas_113_1.xml.zip")
+	obj := &Object{
+		conn: conn,
+	}
+
+	err := obj.Process("../../test", "files/pnas/113_1/pnas_113_1.pdf.zip")
 
 	log.Println(err)
 }

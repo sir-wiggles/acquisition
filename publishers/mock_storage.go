@@ -1,6 +1,8 @@
 package publishers
 
 import (
+	"io"
+	"log"
 	"os"
 	"path"
 
@@ -30,5 +32,17 @@ func (z *MockStorage) Get(o *services.Object) error {
 }
 
 func (z *MockStorage) Put(o *services.Object) error {
+
+	file, err := os.OpenFile(path.Join(o.Bucket, o.Key), os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, o.File)
+	if err != nil {
+		return err
+	}
 	return nil
 }
