@@ -1,9 +1,9 @@
 package services
 
 type CobaltQueue interface {
-	Poll() chan *Message
-	Pop(*Message) error
-	NewBatch() CobaltQueueBatch
+	Poll(string, int) chan *Message
+	Pop(string, string) error
+	NewBatch(string) CobaltQueueBatch
 }
 
 type CobaltQueueBatch interface {

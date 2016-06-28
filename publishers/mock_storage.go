@@ -1,8 +1,8 @@
 package publishers
 
 import (
+	"encoding/json"
 	"io"
-	"log"
 	"os"
 	"path"
 
@@ -33,9 +33,15 @@ func (z *MockStorage) Get(o *services.Object) error {
 
 func (z *MockStorage) Put(o *services.Object) error {
 
-	file, err := os.OpenFile(path.Join(o.Bucket, o.Key), os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	filepath := path.Join(o.Bucket, o.Key)
+
+	dir, _ := path.Split(filepath)
+	if err := os.MkdirAll(dir, 0777); err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(filepath, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 	defer file.Close()
@@ -45,4 +51,42 @@ func (z *MockStorage) Put(o *services.Object) error {
 		return err
 	}
 	return nil
+}
+
+type MockQueue struct {
+	Messages []string
+}
+
+func (z *MockQueue) Poll() chan *services.Message {
+	return nil
+}
+
+func (z *MockQueue) Pop(m string) error {
+	return nil
+}
+
+func (z *MockQueue) NewBatch() services.CobaltQueueBatch {
+	return &MockBatch{
+		Queue: z,
+	}
+}
+
+type MockBatch struct {
+	Queue *MockQueue
+}
+
+func (z *MockBatch) Add(m interface{}) error {
+
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	z.Queue.Messages = append(z.Queue.Messages, string(body))
+	return nil
+}
+
+func (z *MockBatch) Flush() {
+
+	return
 }

@@ -19,8 +19,6 @@ import (
 
 var extensions = []string{".xml.zip", ".pdf.zip"}
 
-var YewnoProcessedBucket = "../../test/processed"
-
 type Object struct {
 	conn services.CobaltStorage
 	wg   *sync.WaitGroup

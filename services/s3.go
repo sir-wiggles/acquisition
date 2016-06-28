@@ -1,39 +1,41 @@
 package services
 
 import (
+	"compress/gzip"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"path"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/yewno/acquisition/config"
 )
 
-func NewCobaltS3(key, secret, region, bucket string) (CobaltStorage, error) {
+func NewCobaltS3(cfg *config.Config) (CobaltStorage, error) {
 
 	var conn *s3.S3
-	if key == "" && secret == "" {
+	if cfg.Key == "" && cfg.Secret == "" {
 		conn = s3.New(session.New(&aws.Config{
-			Region: aws.String(region),
+			Region: aws.String(cfg.Region),
 		}))
 	} else {
 		conn = s3.New(session.New(&aws.Config{
-			Region:      aws.String(region),
-			Credentials: credentials.NewStaticCredentials(key, secret, ""),
+			Region:      aws.String(cfg.Region),
+			Credentials: credentials.NewStaticCredentials(cfg.Key, cfg.Secret, ""),
 		}))
 	}
 
 	return &CobaltS3{
-		Conn:   conn,
-		bucket: bucket,
+		Conn: conn,
 	}, nil
 }
 
 type CobaltS3 struct {
-	Conn   *s3.S3
-	bucket string
+	Conn *s3.S3
 }
 
 func (c *CobaltS3) Get(object *Object) error {
@@ -62,7 +64,9 @@ func (c *CobaltS3) Get(object *Object) error {
 	object.File = file
 	object.Size = size
 
-	return nil
+	_, err = object.File.Seek(0, 0)
+
+	return err
 }
 
 func (c *CobaltS3) Put(object *Object) error {
@@ -97,5 +101,46 @@ func NewObject(file *os.File, bucket, key string, size int64) *Object {
 }
 
 func (o *Object) Save(conn CobaltStorage) error {
+	var err error
+
+	switch path.Ext(o.Key) {
+	case ".xml":
+		err = o.compress()
+	}
+
+	if err != nil {
+		return err
+	}
+
 	return conn.Put(o)
+}
+
+func (o *Object) Close() error {
+	defer os.Remove(o.File.Name())
+	return o.File.Close()
+}
+
+func (o *Object) compress() error {
+
+	temp, err := ioutil.TempFile("", "")
+	if err != nil {
+		return err
+	}
+
+	writer := gzip.NewWriter(temp)
+
+	_, err = io.Copy(writer, o.File)
+	if err != nil {
+		return err
+	}
+
+	o.File = temp
+	o.Key = fmt.Sprintf("%s.gz", o.Key)
+
+	if err = writer.Close(); err != nil {
+		return err
+	}
+
+	_, err = temp.Seek(0, 0)
+	return err
 }

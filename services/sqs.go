@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,62 +12,89 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/satori/go.uuid"
+	"github.com/yewno/acquisition/config"
 )
 
 // Message
 type Message struct {
-	QueueUrl      string `json:"-"`
-	ReceiptHandle string `json:"-"`
-	Body          string `json:"body"`
+	QueueUrl string `json:"-"`
+	Receipt  string `json:"-"`
+	Body     string `json:"body"`
+}
+
+type PairMessage struct {
+	Source  string `json:"source"`
+	Bucket  string `json:"bucket"`
+	Key     string `json:"key"`
+	MetaKey string `json:"metakey,omitempty"`
+}
+
+type SnsMessage struct {
+	Records []struct {
+		S3 struct {
+			Object struct {
+				Key  string `json:"key"`
+				Size int64  `json:"size"`
+			} `json:"object"`
+			Bucket struct {
+				Name string `json:"name"`
+			} `json:"bucket"`
+		} `json:"s3"`
+	} `json:"Records"`
 }
 
 // CobalsSqs is a struct that handles communication for SQS
 type CobaltSqs struct {
-	Conn  *sqs.SQS
-	queue string
+	Conn      *sqs.SQS
+	queueURLs map[string]string
 }
 
 // NewCobaltSqs will return a queue connection. If key and secret are empty strings then they
 // will be pulled from the .aws credentials file.  Queue is the name of the queue and not the
 // url. If a queue with that name doesn't exist then an error will be returned.
-func NewCobaltSqs(key, secret, region, queue string) (CobaltQueue, error) {
+func NewCobaltSqs(cfg *config.Config, queues ...string) (CobaltQueue, error) {
 
 	var conn *sqs.SQS
 
-	if key == "" && secret == "" {
+	if cfg.Key == "" && cfg.Secret == "" {
 		conn = sqs.New(session.New(&aws.Config{
-			Region: aws.String(region),
+			Region: aws.String(cfg.Region),
 		}))
 
 	} else {
 		conn = sqs.New(session.New(&aws.Config{
-			Region:      aws.String(region),
-			Credentials: credentials.NewStaticCredentials(key, secret, ""),
+			Region:      aws.String(cfg.Region),
+			Credentials: credentials.NewStaticCredentials(cfg.Key, cfg.Secret, ""),
 		}))
 	}
 
-	resp, err := conn.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: aws.String(queue)})
-	if err != nil {
-		return nil, err
+	queueURLs := make(map[string]string, len(queues))
+	for _, q := range queues {
+		resp, err := conn.GetQueueUrl(&sqs.GetQueueUrlInput{QueueName: aws.String(q)})
+		if err != nil {
+			return nil, err
+		}
+		queueURLs[q] = *resp.QueueUrl
+
 	}
 
 	return &CobaltSqs{
-		Conn:  conn,
-		queue: *resp.QueueUrl,
+		Conn:      conn,
+		queueURLs: queueURLs,
 	}, nil
 }
 
 // Poll receives messages from the queue and populates the channel. Poll will continue
 // to check the queue for messages returning nil when no messages were found.
-func (c *CobaltSqs) Poll() chan *Message {
-	response := make(chan *Message, 10)
+func (c *CobaltSqs) Poll(queue string, max int) chan *Message {
+	response := make(chan *Message, max)
 
 	go func(channel chan *Message) {
 		defer close(channel)
 
 		params := &sqs.ReceiveMessageInput{
-			QueueUrl:              aws.String(c.queue),
-			MaxNumberOfMessages:   aws.Int64(10),
+			QueueUrl:              aws.String(c.queueURLs[queue]),
+			MaxNumberOfMessages:   aws.Int64(int64(max)),
 			MessageAttributeNames: []*string{aws.String("ALL")},
 			WaitTimeSeconds:       aws.Int64(2),
 		}
@@ -87,20 +113,7 @@ func (c *CobaltSqs) Poll() chan *Message {
 			}
 
 			for _, m := range resp.Messages {
-
-				msg := &Message{}
-
-				body := strings.Replace(*m.Body, "\n", "", -1)
-				err = json.Unmarshal([]byte(body), msg)
-				if err != nil {
-					log.Println(err)
-					continue
-				}
-
-				msg.ReceiptHandle = *m.ReceiptHandle
-				msg.QueueUrl = c.queue
-
-				channel <- msg
+				channel <- &Message{Body: *m.Body, Receipt: *m.ReceiptHandle}
 			}
 		}
 	}(response)
@@ -108,11 +121,11 @@ func (c *CobaltSqs) Poll() chan *Message {
 }
 
 // Pop removes a message from the queue
-func (c *CobaltSqs) Pop(msg *Message) error {
+func (c *CobaltSqs) Pop(queue, receipt string) error {
 
 	params := &sqs.DeleteMessageInput{
-		QueueUrl:      aws.String(msg.QueueUrl),
-		ReceiptHandle: aws.String(msg.ReceiptHandle),
+		QueueUrl:      aws.String(c.queueURLs[queue]),
+		ReceiptHandle: aws.String(receipt),
 	}
 	_, err := c.Conn.DeleteMessage(params)
 
@@ -125,8 +138,8 @@ func (c *CobaltSqs) Pop(msg *Message) error {
 // NewBatch returns a batch struct that will bundle sqs messages and send them up
 // onces the buffer is full (10 messages) or if the last message received was more than
 // 10 seconds ago.
-func (c *CobaltSqs) NewBatch() CobaltQueueBatch {
-	return NewCobaltSqsBatch(c.Conn, c.queue)
+func (c *CobaltSqs) NewBatch(queue string) CobaltQueueBatch {
+	return NewCobaltSqsBatch(c.Conn, c.queueURLs[queue])
 }
 
 // NewCobaltSqsBatch creates a new batch struct attached to the queue it was called from.
