@@ -6,10 +6,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 
 	"github.com/yewno/acquisition/config"
+	"github.com/yewno/acquisition/publishers"
 	"github.com/yewno/acquisition/publishers/bmj"
+	"github.com/yewno/acquisition/publishers/pnas"
 	"github.com/yewno/acquisition/services"
 )
 
@@ -29,7 +32,7 @@ var (
 
 func init() {
 
-	flag.IntVar(&__workers__, "workers", 20, "number of workers to run")
+	flag.IntVar(&__workers__, "workers", 2, "number of workers to run")
 	flag.StringVar(&__processed_bucket__, "processed-bucket", "yewno-content", "bucket where processed items go")
 	flag.StringVar(&__ftp_bucket__, "ftp-bucket", "yewno-ftp", "bucket with raw files")
 	flag.StringVar(&__new_content_queue__, "new-content-queue", "yewno-cobalt-list", "queue that has new content from sns")
@@ -76,7 +79,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 
-	stats := bmj.NewStats()
+	stats := publishers.NewStats()
 	control := make(chan bool, 1)
 	go logger(stats, control)
 
@@ -100,10 +103,21 @@ func main() {
 			continue
 		}
 
-		obj := bmj.NewObject(storage, queue, &wg, cfg, pool, stats)
+		publisher := strings.Split(message.Records[0].S3.Object.Key, "/")[1]
+
+		switch publisher {
+		case "pnas":
+			obj := pnas.NewObject(storage, queue, &wg, cfg, pool, stats)
+			go obj.Process(m.Receipt, message)
+		case "bmj":
+			obj := bmj.NewObject(storage, queue, &wg, cfg, pool, stats)
+			go obj.Process(m.Receipt, message)
+		default:
+			log.Printf("Missing process for (%s)", publisher)
+			continue
+		}
 
 		pool <- true
-		go obj.Process(m.Receipt, message)
 	}
 
 PollBreak:
@@ -122,7 +136,7 @@ func parse(msg string) (*services.SnsMessage, error) {
 	return message, err
 }
 
-func logger(stats *bmj.Stats, control chan bool) {
+func logger(stats *publishers.Stats, control chan bool) {
 	var (
 		archive        int
 		meta           int

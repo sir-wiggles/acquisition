@@ -25,6 +25,19 @@ type Object struct {
 	stats *publishers.Stats
 }
 
+func NewObject(conn services.CobaltStorage, queue services.CobaltQueue, wg *sync.WaitGroup, cfg *config.Config, pool chan bool, stats *publishers.Stats) *Object {
+	wg.Add(1)
+	return &Object{
+		conn:  conn,
+		queue: queue,
+		wg:    wg,
+		cfg:   cfg,
+		pool:  pool,
+
+		stats: stats,
+	}
+}
+
 func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 
 	defer o.wg.Done()
@@ -38,7 +51,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 	)
 	zipFilename := key
 
-	log.Println(message, bucket, key)
+	log.Println(bucket, key)
 
 	if !strings.HasSuffix(key, ".xml.zip") {
 		return o.removeMessage(receipt)
