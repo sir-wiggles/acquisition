@@ -5,14 +5,13 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
-	"os"
 	"path"
 	"strings"
 	"sync"
 
 	"github.com/yewno/acquisition/config"
+	"github.com/yewno/acquisition/publishers"
 	"github.com/yewno/acquisition/services"
 )
 
@@ -22,9 +21,11 @@ type Object struct {
 	wg    *sync.WaitGroup
 	cfg   *config.Config
 	pool  chan bool
+
+	stats *publishers.Stats
 }
 
-func NewObject(conn services.CobaltStorage, queue services.CobaltQueue, wg *sync.WaitGroup, cfg *config.Config, pool chan bool) *Object {
+func NewObject(conn services.CobaltStorage, queue services.CobaltQueue, wg *sync.WaitGroup, cfg *config.Config, pool chan bool, stats *publishers.Stats) *Object {
 	wg.Add(1)
 	return &Object{
 		conn:  conn,
@@ -32,6 +33,8 @@ func NewObject(conn services.CobaltStorage, queue services.CobaltQueue, wg *sync
 		wg:    wg,
 		cfg:   cfg,
 		pool:  pool,
+
+		stats: stats,
 	}
 }
 
@@ -44,8 +47,11 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 		bucket = message.Records[0].S3.Bucket.Name
 		key    = message.Records[0].S3.Object.Key
 		size   = message.Records[0].S3.Object.Size
+		pairs  = make(map[string]*publishers.Pair, 100)
 	)
+
 	log.Println(bucket, key, size)
+	tarFilename := key
 
 	publisher := strings.Split(key, "/")[1]
 	if publisher != "bmj" {
@@ -55,20 +61,19 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 	object := services.NewObject(nil, bucket, key, size)
 
 	if err := o.conn.Get(object); err != nil {
-		log.Println("Getting key: ", err)
 		return err
 	}
 	defer object.Close()
 
 	gzipReader, err := gzip.NewReader(object.File)
 	if err != nil {
-		log.Println("New reader: ", err)
 		return err
 	}
 
 	tarReader := tar.NewReader(gzipReader)
 
-	pairs := make(map[string]*Pair, 100)
+	o.stats.Archive <- 1
+
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -76,25 +81,20 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			break
 		}
 		if err != nil {
-			log.Println("Reading tar: ", err)
-			continue
-		}
-
-		if header.FileInfo().IsDir() {
 			continue
 		}
 
 		key := fmt.Sprintf("bmj/%s", header.Name)
-		file, size, err := ArchiveEntryToFile(tarReader)
+		base := strings.Split(header.Name, ".")[0]
+		ext := path.Ext(header.Name)
+
+		file, size, err := publishers.ArchiveEntryToFile(tarReader)
 		if err != nil {
 			continue
 		}
 
-		base := strings.Split(header.Name, ".")[0]
-
 		object := services.NewObject(file, o.cfg.ProcessedBucket, key, size)
 
-		ext := path.Ext(header.Name)
 		err = object.Save(o.conn)
 		object.Close()
 
@@ -102,25 +102,29 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 		case ".pdf":
 			pair, ok := pairs[base]
 			if !ok {
-				pairs[base] = &Pair{Content: object.Key}
+				pairs[base] = &publishers.Pair{Content: object.Key}
 			} else {
 				pair.Content = object.Key
 			}
+			o.stats.Content <- 1
 
 		case ".xml":
 			pair, ok := pairs[base]
 			if !ok {
-				pairs[base] = &Pair{Meta: object.Key}
+				pairs[base] = &publishers.Pair{Meta: object.Key}
 			} else {
 				pair.Meta = object.Key
 			}
+			o.stats.Meta <- 1
+
+		default:
+			o.stats.Other <- 1
+
 		}
 		if err != nil {
 			log.Println(err)
 		}
 	}
-
-	//log.Printf("Pairs %d", len(pairs))
 
 	batch := o.queue.NewBatch(o.cfg.ProcessedQueue)
 	for _, p := range pairs {
@@ -131,7 +135,18 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 				Key:     p.Content,
 				MetaKey: p.Meta,
 			}
+			o.stats.Pairs <- 1
 			batch.Add(m)
+		} else {
+			var key string
+			if p.Meta == "" {
+				o.stats.MissingMeta <- 1
+				key = p.Content
+			} else {
+				o.stats.MissingContent <- 1
+				key = p.Meta
+			}
+			o.stats.ProblemFilenames <- fmt.Sprintf("%s/%s", tarFilename, key)
 		}
 	}
 	batch.Flush()
@@ -142,21 +157,4 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 	}
 
 	return nil
-}
-
-type Pair struct {
-	Meta    string
-	Content string
-}
-
-func ArchiveEntryToFile(reader io.Reader) (*os.File, int64, error) {
-
-	temp, err := ioutil.TempFile("", "")
-	if err != nil {
-		return nil, -1, err
-	}
-
-	size, err := io.Copy(temp, reader)
-	_, err = temp.Seek(0, 0)
-	return temp, size, err
 }

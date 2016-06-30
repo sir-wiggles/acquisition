@@ -3,6 +3,7 @@ package publishers
 import (
 	"encoding/json"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 
@@ -57,15 +58,15 @@ type MockQueue struct {
 	Messages []string
 }
 
-func (z *MockQueue) Poll() chan *services.Message {
+func (z *MockQueue) Poll(queue string, amount int) chan *services.Message {
 	return nil
 }
 
-func (z *MockQueue) Pop(m string) error {
+func (z *MockQueue) Pop(queue, receipt string) error {
 	return nil
 }
 
-func (z *MockQueue) NewBatch() services.CobaltQueueBatch {
+func (z *MockQueue) NewBatch(queue string) services.CobaltQueueBatch {
 	return &MockBatch{
 		Queue: z,
 	}
@@ -89,4 +90,48 @@ func (z *MockBatch) Add(m interface{}) error {
 func (z *MockBatch) Flush() {
 
 	return
+}
+
+type Pair struct {
+	Meta    string
+	Content string
+}
+
+func ArchiveEntryToFile(reader io.Reader) (*os.File, int64, error) {
+
+	temp, err := ioutil.TempFile("", "")
+	if err != nil {
+		return nil, -1, err
+	}
+
+	size, err := io.Copy(temp, reader)
+	_, err = temp.Seek(0, 0)
+	return temp, size, err
+}
+
+type Stats struct {
+	Archive chan int
+
+	Meta    chan int
+	Content chan int
+	Other   chan int
+
+	Pairs          chan int
+	MissingMeta    chan int
+	MissingContent chan int
+
+	ProblemFilenames chan string
+}
+
+func NewStats() *Stats {
+	return &Stats{
+		Archive:          make(chan int, 100),
+		Meta:             make(chan int, 100),
+		Content:          make(chan int, 100),
+		Other:            make(chan int, 100),
+		Pairs:            make(chan int, 100),
+		MissingMeta:      make(chan int, 100),
+		MissingContent:   make(chan int, 100),
+		ProblemFilenames: make(chan string, 100),
+	}
 }

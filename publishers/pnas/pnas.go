@@ -2,212 +2,171 @@ package pnas
 
 import (
 	"archive/zip"
-	"encoding/xml"
-	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"os"
+	"log"
 	"path"
 	"strings"
 	"sync"
 
-	"golang.org/x/net/html/charset"
-
+	"github.com/yewno/acquisition/config"
+	"github.com/yewno/acquisition/publishers"
 	"github.com/yewno/acquisition/services"
 )
 
 var extensions = []string{".xml.zip", ".pdf.zip"}
 
 type Object struct {
-	conn services.CobaltStorage
-	wg   *sync.WaitGroup
+	conn  services.CobaltStorage
+	queue services.CobaltQueue
+	cfg   *config.Config
+	wg    *sync.WaitGroup
+	pool  chan bool
+
+	stats *publishers.Stats
 }
 
-func (o *Object) Process(bucket, key string) error {
+func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 
-	object := services.NewObject(nil, bucket, key, 0)
+	defer o.wg.Done()
+	defer func() { <-o.pool }()
 
-	if !contains(object.Key, extensions) {
-		return nil
+	var (
+		bucket = message.Records[0].S3.Bucket.Name
+		key    = message.Records[0].S3.Object.Key
+		size   = message.Records[0].S3.Object.Size
+		pairs  = make(map[string]*publishers.Pair, 100)
+	)
+	zipFilename := key
+
+	log.Println(message, bucket, key)
+
+	if !strings.HasSuffix(key, ".xml.zip") {
+		return o.removeMessage(receipt)
 	}
+
+	// Get meta files
+	object := services.NewObject(nil, bucket, key, size)
 
 	err := o.conn.Get(object)
 	if err != nil {
 		return err
 	}
 
-	reader, err := zip.NewReader(object.File, object.Size)
+	readerXml, err := zip.NewReader(object.File, object.Size)
 	if err != nil {
 		return err
 	}
 
-	_, filename := path.Split(object.Key)
-	parts := strings.Split(filename, "_")
+	// Get content files
+	key = fmt.Sprintf("%s.pdf.zip", strings.TrimSuffix(key, ".xml.zip"))
+	object = services.NewObject(nil, bucket, key, 0)
 
-	volume := parts[1]
-
-	for _, file := range reader.File {
-
-		if file.FileInfo().IsDir() {
-			continue
-		}
-
-		page, err := getPage(file.FileInfo().Name())
-		if err != nil {
-			continue
-		}
-
-		ext := path.Ext(file.Name)
-		switch ext {
-
-		case ".xml":
-			issue := strings.TrimSuffix(parts[len(parts)-1], ".xml.zip")
-			name := fmt.Sprintf("%s/pnas_v%s_i%s_p%s%s", "files/pnas", volume, issue, page, ".xml")
-			err = o.handleXML(file, name)
-
-		case ".pdf":
-			issue := strings.TrimSuffix(parts[len(parts)-1], ".pdf.zip")
-			name := fmt.Sprintf("%s/pnas_v%s_i%s_p%s%s", "files/pnas", volume, issue, page, ".pdf")
-			err = o.handlePDF(file, name)
-
-		default:
-			return errors.New(fmt.Sprintf("(%s) Extension handler missing for (%s)", "PNAS", ext))
-
-		}
-	}
-	return nil
-}
-
-type record struct {
-	Volume string `xml:"volume"`
-	Issue  string `xml:"issue"`
-	Page   string `xml:"fpage"`
-}
-
-func (o *Object) handleXML(file *zip.File, key string) error {
-	reader, err := file.Open()
+	err = o.conn.Get(object)
 	if err != nil {
 		return err
 	}
 
-	decoder := xml.NewDecoder(reader)
-	decoder.CharsetReader = charset.NewReaderLabel
-	var meta record
-	for {
-		t, err := decoder.Token()
+	readerZip, err := zip.NewReader(object.File, object.Size)
+	if err != nil {
+		return err
+	}
 
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return err
-		}
+	dir, _ := path.Split(object.Key)
+	prefix := strings.Split(dir, "/")[2]
 
-		switch se := t.(type) {
-		case xml.StartElement:
-			if se.Name.Local == "article-meta" {
-				err := decoder.DecodeElement(&meta, &se)
-				if err != nil {
-					break
+	for _, reader := range []*zip.Reader{readerXml, readerZip} {
+
+		for _, zipFile := range reader.File {
+
+			if zipFile.FileInfo().IsDir() {
+				continue
+			}
+
+			key := fmt.Sprintf("pnas/%s-%s", prefix, zipFile.Name)
+			base := strings.Split(zipFile.Name, ".")[0]
+			ext := path.Ext(zipFile.Name)
+
+			log.Println(key)
+
+			f, err := zipFile.Open()
+			if err != nil {
+				continue
+			}
+
+			file, size, err := publishers.ArchiveEntryToFile(f)
+			if err != nil {
+				continue
+			}
+			f.Close()
+
+			object := services.NewObject(file, o.cfg.ProcessedBucket, key, size)
+
+			err = object.Save(o.conn)
+			object.Close()
+
+			switch ext {
+
+			case ".pdf":
+				pair, ok := pairs[base]
+				if !ok {
+					pairs[base] = &publishers.Pair{Content: object.Key}
+				} else {
+					pair.Content = object.Key
 				}
+				o.stats.Content <- 1
+
+			case ".xml":
+				pair, ok := pairs[base]
+				if !ok {
+					pairs[base] = &publishers.Pair{Meta: object.Key}
+				} else {
+					pair.Meta = object.Key
+				}
+				o.stats.Meta <- 1
+
+			default:
+				o.stats.Other <- 1
+			}
+
+			if err != nil {
+				log.Println(err)
 			}
 		}
+	}
 
-		temp, size, err := ZipEntryToFile(reader)
-		if err != nil {
-			return err
-		}
-
-		object := services.NewObject(temp, YewnoProcessedBucket, key, size)
-
-		err = object.Save(o.conn)
-		if err != nil {
-			return err
+	batch := o.queue.NewBatch(o.cfg.ProcessedQueue)
+	for _, p := range pairs {
+		if p.Meta != "" && p.Content != "" {
+			m := &services.PairMessage{
+				Source:  "pnas",
+				Bucket:  o.cfg.ProcessedBucket,
+				Key:     p.Content,
+				MetaKey: p.Meta,
+			}
+			o.stats.Pairs <- 1
+			batch.Add(m)
+		} else {
+			var key string
+			if p.Meta == "" {
+				o.stats.MissingMeta <- 1
+				key = p.Content
+			} else {
+				o.stats.MissingContent <- 1
+				key = p.Meta
+			}
+			o.stats.ProblemFilenames <- fmt.Sprintf("%s/%s", zipFilename, key)
 		}
 	}
+	batch.Flush()
+
+	o.removeMessage(receipt)
 	return nil
 }
 
-func (o *Object) handlePDF(file *zip.File, key string) error {
-	reader, err := file.Open()
-	if err != nil {
+func (o *Object) removeMessage(receipt string) error {
+	if err := o.queue.Pop(o.cfg.NewContentQueue, receipt); err != nil {
+		log.Println(err)
 		return err
 	}
-
-	temp, size, err := ZipEntryToFile(reader)
-	if err != nil {
-		return err
-	}
-
-	object := services.NewObject(temp, YewnoProcessedBucket, key, size)
-
-	err = object.Save(o.conn)
-	if err != nil {
-		return err
-	}
-
 	return nil
-}
-
-func ZipEntryToFile(reader io.Reader) (*os.File, int64, error) {
-
-	temp, err := ioutil.TempFile("", "")
-	if err != nil {
-		return nil, -1, err
-	}
-
-	size, err := io.Copy(temp, reader)
-	return temp, size, err
-}
-
-func contains(s string, sa []string) bool {
-
-	for _, ext := range sa {
-		if strings.HasSuffix(s, ext) {
-			return true
-		}
-	}
-	return false
-}
-
-func trimToFirstInt(in string) string {
-	var index int
-	for _, v := range in {
-		switch {
-		case v >= '0' && v <= '9':
-			return in[index:len(in)]
-		default:
-			index++
-		}
-	}
-	return in
-}
-
-func getPage(filename string) (string, error) {
-	trimmedFilename := trimToFirstInt(filename)
-	pageParts := strings.Split(trimmedFilename, ".")
-	page := pageParts[0]
-
-	if page == "" || page == "xml" {
-		return "", errors.New("No pages found")
-	}
-
-	trimVal := 6
-	if len(page) < 6 {
-		trimVal = len(page)
-	}
-
-	page = page[len(page)-trimVal : len(page)]
-	page = strings.Replace(page, "-", "", -1)
-	if strings.HasPrefix(page, "q") {
-		page = page[1:len(page)]
-	}
-
-	page = strings.TrimLeft(page, "0")
-	if len(page) < 5 {
-		page = strings.Repeat("0", 5-len(page)) + page
-	}
-
-	page = page[len(page)-5 : len(page)]
-	return page, nil
 }
