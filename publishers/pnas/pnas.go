@@ -83,10 +83,11 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			}
 
 			key := fmt.Sprintf("pnas/%s-%s", prefix, zipFile.Name)
-			base := strings.Split(zipFile.Name, ".")[0]
+			base := zipFile.Name
+			for _, suffix := range []string{".pdf", ".xml"} {
+				base = strings.TrimSuffix(base, suffix)
+			}
 			ext := path.Ext(zipFile.Name)
-
-			log.Println(key)
 
 			f, err := zipFile.Open()
 			if err != nil {
