@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
 
@@ -116,8 +117,16 @@ func (o *Object) Save(conn CobaltStorage) error {
 }
 
 func (o *Object) Close() error {
-	defer os.Remove(o.File.Name())
-	return o.File.Close()
+	err := o.File.Close()
+	if err != nil {
+		log.Println(err)
+	}
+	err = os.Remove(o.File.Name())
+
+	if err != nil {
+		log.Println(err)
+	}
+	return err
 }
 
 func (o *Object) compress() error {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -193,42 +192,20 @@ func (c *CobaltSqsBatch) process() {
 	defer c.wg.Done()
 
 	params := &sqs.SendMessageBatchInput{QueueUrl: aws.String(c.queue)}
-	ticker := time.NewTicker(time.Second * 1)
-	count := 0
 	batch := make([]*sqs.SendMessageBatchRequestEntry, 0, 10)
-	lastMessage := time.Now()
 
-	for {
-		select {
+	for m := range c.messages {
 
-		case m, ok := <-c.messages:
-			if !ok {
-				goto BatchClosed
-			}
-			lastMessage = time.Now()
+		batch = append(batch, m)
 
-			count++
-
-			batch = append(batch, m)
-			if len(batch) < 10 {
-				continue
-			}
-
-		case <-ticker.C:
-			if len(batch) == 0 {
-				continue
-			}
-
-			if time.Now().Sub(lastMessage) < time.Second*10 {
-				continue
-			}
+		if len(batch) < 10 {
+			continue
 		}
 
 		params.Entries = batch
 		batch = c.send(params)
-	}
 
-BatchClosed:
+	}
 
 	if len(batch) > 0 {
 		params.Entries = batch

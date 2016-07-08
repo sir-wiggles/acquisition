@@ -81,6 +81,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			break
 		}
 		if err != nil {
+			log.Println(err)
 			continue
 		}
 
@@ -90,6 +91,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 
 		file, size, err := publishers.ArchiveEntryToFile(tarReader)
 		if err != nil {
+			log.Println(err)
 			continue
 		}
 
@@ -142,7 +144,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			if p.Meta == "" {
 				o.stats.MissingMeta <- 1
 				key = p.Content
-			} else {
+			} else if p.Content == "" {
 				o.stats.MissingContent <- 1
 				key = p.Meta
 			}
