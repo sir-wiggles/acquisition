@@ -13,7 +13,9 @@ import (
 	"github.com/yewno/acquisition/publishers"
 	"github.com/yewno/acquisition/publishers/bmj"
 	"github.com/yewno/acquisition/publishers/cup"
+	"github.com/yewno/acquisition/publishers/oup"
 	"github.com/yewno/acquisition/publishers/pnas"
+	"github.com/yewno/acquisition/publishers/tandf"
 	"github.com/yewno/acquisition/services"
 )
 
@@ -116,6 +118,12 @@ func main() {
 			go obj.Process(m.Receipt, message)
 		case "cup":
 			obj := cup.NewObject(storage, queue, &wg, cfg, pool, stats)
+			go obj.Process(m.Receipt, message)
+		case "tandf":
+			obj := tandf.NewObject(storage, queue, &wg, cfg, pool, stats)
+			go obj.Process(m.Receipt, message)
+		case "oup":
+			obj := oup.NewObject(storage, queue, &wg, cfg, pool, stats)
 			go obj.Process(m.Receipt, message)
 		default:
 			log.Printf("Missing process for (%s)", publisher)
