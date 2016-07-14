@@ -53,11 +53,6 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 	log.Println(bucket, key, size)
 	tarFilename := key
 
-	publisher := strings.Split(key, "/")[1]
-	if publisher != "bmj" {
-		return nil
-	}
-
 	object := services.NewObject(nil, bucket, key, size)
 
 	if err := o.conn.Get(object); err != nil {

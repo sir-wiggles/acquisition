@@ -11,6 +11,7 @@ import (
 
 	"github.com/yewno/acquisition/config"
 	"github.com/yewno/acquisition/publishers"
+	"github.com/yewno/acquisition/publishers/acm"
 	"github.com/yewno/acquisition/publishers/bmj"
 	"github.com/yewno/acquisition/publishers/cup"
 	"github.com/yewno/acquisition/publishers/oup"
@@ -124,6 +125,9 @@ func main() {
 			go obj.Process(m.Receipt, message)
 		case "oup":
 			obj := oup.NewObject(storage, queue, &wg, cfg, pool, stats)
+			go obj.Process(m.Receipt, message)
+		case "acm":
+			obj := acm.NewObject(storage, queue, &wg, cfg, pool, stats)
 			go obj.Process(m.Receipt, message)
 		default:
 			log.Printf("Missing process for (%s)", publisher)
