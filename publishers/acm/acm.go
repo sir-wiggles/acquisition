@@ -246,6 +246,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 	}
 
 	batch := o.queue.NewBatch(o.cfg.ProcessedQueue)
+	count := 0
 	for _, key := range keys {
 		m := services.PairMessage{
 			Source: "acm",
@@ -253,7 +254,9 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			Key:    fmt.Sprintf("%s.gz", key),
 		}
 		batch.Add(m)
+		count++
 	}
+	o.stats.Report <- fmt.Sprintf("acm:%d", count)
 	batch.Flush()
 
 	if err = o.queue.Pop(o.cfg.NewContentQueue, receipt); err != nil {

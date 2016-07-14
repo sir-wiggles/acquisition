@@ -121,6 +121,7 @@ type Stats struct {
 	MissingContent chan int
 
 	ProblemFilenames chan string
+	Report           chan string
 }
 
 func NewStats() *Stats {
@@ -133,5 +134,6 @@ func NewStats() *Stats {
 		MissingMeta:      make(chan int, 100),
 		MissingContent:   make(chan int, 100),
 		ProblemFilenames: make(chan string, 100),
+		Report:           make(chan string, 100),
 	}
 }

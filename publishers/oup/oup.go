@@ -144,6 +144,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			o.stats.ProblemFilenames <- fmt.Sprintf("%s/%s", tarFilename, key)
 		}
 	}
+	o.stats.Report <- fmt.Sprintf("oup:%d", count)
 	batch.Flush()
 
 	if err := o.queue.Pop(o.cfg.NewContentQueue, receipt); err != nil {

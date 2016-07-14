@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -155,16 +156,17 @@ func parse(msg string) (*services.SnsMessage, error) {
 
 func logger(stats *publishers.Stats, control chan bool) {
 	var (
-		archive        int
-		meta           int
-		content        int
-		other          int
-		pairs          int
-		missingMeta    int
-		missingContent int
+		archive         int
+		meta            int
+		content         int
+		other           int
+		pairs           int
+		missingMeta     int
+		missingContent  int
+		publisherReport map[string]int64
 	)
 
-	file, err := os.OpenFile("bmj.log", os.O_CREATE|os.O_RDWR, 0666)
+	file, err := os.OpenFile("report.log", os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -190,12 +192,27 @@ func logger(stats *publishers.Stats, control chan bool) {
 			missingContent++
 		case fn := <-stats.ProblemFilenames:
 			logger.Println(fn)
+		case report := <-stats.Report:
+			parts := strings.Split(report, ":")
+			val := publisherReport[parts[0]]
+			sent, err := strconv.ParseInt(parts[1], 10, 64)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			publisherReport[parts[0]] = val + sent
+
 		case <-control:
 			goto LogBreak
 		}
 	}
 LogBreak:
 	logger.Printf(logFormat, archive, meta, content, other, pairs, missingMeta, missingContent)
+
+	for k, v := range publisherReport {
+		logger.Printf("%s: %s", k, v)
+	}
+
 	control <- true
 }
 

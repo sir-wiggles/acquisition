@@ -171,6 +171,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 			o.stats.ProblemFilenames <- fmt.Sprintf("%s/%s", zipFilename, key)
 		}
 	}
+	o.stats.Report <- fmt.Sprintf("pnas:%d", count)
 	batch.Flush()
 
 	o.removeMessage(receipt)
