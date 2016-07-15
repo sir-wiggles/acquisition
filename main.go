@@ -15,6 +15,7 @@ import (
 	"github.com/yewno/acquisition/publishers/acm"
 	"github.com/yewno/acquisition/publishers/bmj"
 	"github.com/yewno/acquisition/publishers/cup"
+	"github.com/yewno/acquisition/publishers/nas"
 	"github.com/yewno/acquisition/publishers/oup"
 	"github.com/yewno/acquisition/publishers/pnas"
 	"github.com/yewno/acquisition/publishers/tandf"
@@ -130,6 +131,9 @@ func main() {
 		case "acm":
 			obj := acm.NewObject(storage, queue, &wg, cfg, pool, stats)
 			go obj.Process(m.Receipt, message)
+		case "nas":
+			obj := nas.NewObject(storage, queue, &wg, cfg, pool, stats)
+			go obj.Process(m.Receipt, message)
 		default:
 			log.Printf("Missing process for (%s)", publisher)
 			continue
@@ -163,7 +167,7 @@ func logger(stats *publishers.Stats, control chan bool) {
 		pairs           int
 		missingMeta     int
 		missingContent  int
-		publisherReport map[string]int64
+		publisherReport = make(map[string]int64, 10)
 	)
 
 	file, err := os.OpenFile("report.log", os.O_CREATE|os.O_RDWR, 0666)

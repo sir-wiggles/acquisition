@@ -124,8 +124,10 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 	}
 
 	batch := o.queue.NewBatch(o.cfg.ProcessedQueue)
+	count := 0
 	for _, p := range pairs {
 		if p.Meta != "" && p.Content != "" {
+			count++
 			m := &services.PairMessage{
 				Source:  "bmj",
 				Bucket:  o.cfg.ProcessedBucket,

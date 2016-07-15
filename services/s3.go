@@ -113,6 +113,7 @@ func (o *Object) Save(conn CobaltStorage) error {
 		return err
 	}
 
+	log.Printf("Uploading: %s > %s", o.Key, o.Bucket)
 	return conn.Put(o)
 }
 
