@@ -63,6 +63,9 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 
 	o.stats.Archive <- 1
 
+	base := path.Base(key)
+	base := strings.TrimSuffix(key, path.Ext(key))
+
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -77,7 +80,7 @@ func (o *Object) Process(receipt string, message *services.SnsMessage) error {
 		parts := strings.Split(header.Name, "/")
 		fn := parts[len(parts)-1]
 
-		key := fmt.Sprintf("oup/%s", fn)
+		key := fmt.Sprintf("oup/%s-%s", base, fn)
 		log.Println(key)
 		base := strings.Split(fn, ".")[0]
 		ext := path.Ext(fn)
