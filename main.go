@@ -214,7 +214,8 @@ LogBreak:
 	logger.Printf(logFormat, archive, meta, content, other, pairs, missingMeta, missingContent)
 
 	for k, v := range publisherReport {
-		logger.Printf("%s: %s", k, v)
+		logger.Printf("%s: %d", k, v)
+		log.Printf("%s: %d", k, v)
 	}
 
 	control <- true
